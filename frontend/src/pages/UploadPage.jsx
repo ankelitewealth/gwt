@@ -381,7 +381,7 @@ function ReviewStep({ parsed, onImport, onBack }) {
             <span key={b.label} style={S.badge(b.color)}>{b.label}</span>
           ))}
         </div>
-        <div style={{ display: 'flex', gap: 8' }}>
+        <div style={{ display: 'flex', gap: 8 }}>
           {pending > 0 && (
             <button style={S.btn('secondary')} onClick={searchAll}>
               Auto-match all
