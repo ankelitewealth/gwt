@@ -1,14 +1,3 @@
-/**
- * Auth routes — /api/auth
- *
- * Development: issues self-signed JWTs so you can test the API without
- * an external auth provider. Set NODE_ENV=development and JWT_SECRET in .env.
- *
- * Production: remove the /register and /login routes entirely and rely on
- * your auth provider (Clerk, Auth0) to issue tokens. The requireAuth
- * middleware is the only thing that needs to change.
- */
-
 import { Router } from 'express';
 import { z } from 'zod';
 import { createHash } from 'crypto';
@@ -18,65 +7,54 @@ import { logger } from '../lib/logger.js';
 
 const router = Router();
 
-// ── Minimal JWT implementation (no external deps) ────────────────────────────
+// ── JWT implementation ────────────────────────────────────────────────────────
 function base64url(str) {
   return Buffer.from(str).toString('base64')
     .replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
 }
 
-function signJwt(payload) {
+export function signJwt(payload) {
   const secret = process.env.JWT_SECRET;
-  if (!secret) throw new Error('JWT_SECRET not set');
-
+  if (!secret) throw new Error('JWT_SECRET not set in environment variables');
   const header = base64url(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
   const body = base64url(JSON.stringify({
     ...payload,
     iat: Math.floor(Date.now() / 1000),
     exp: Math.floor(Date.now() / 1000) + 60 * 60 * 24 * 7, // 7 days
   }));
-
   const sig = createHash('sha256')
     .update(`${header}.${body}${secret}`)
     .digest('base64url');
-
   return `${header}.${body}.${sig}`;
 }
 
 export function verifyJwt(token) {
   const secret = process.env.JWT_SECRET;
-  if (!secret) throw new Error('JWT_SECRET not set');
-
+  if (!secret) throw new Error('JWT_SECRET not set in environment variables');
   const parts = token.split('.');
   if (parts.length !== 3) throw new Error('Invalid token format');
-
   const [header, body, sig] = parts;
   const expected = createHash('sha256')
     .update(`${header}.${body}${secret}`)
     .digest('base64url');
-
   if (sig !== expected) throw new Error('Invalid token signature');
-
   const payload = JSON.parse(Buffer.from(body, 'base64url').toString());
   if (payload.exp < Math.floor(Date.now() / 1000)) throw new Error('Token expired');
-
   return payload;
 }
 
-// Simple password hash — replace with bcrypt in production
 function hashPassword(password) {
-  return createHash('sha256').update(password + process.env.JWT_SECRET).digest('hex');
+  return createHash('sha256')
+    .update(password + process.env.JWT_SECRET)
+    .digest('hex');
 }
 
-// ── POST /api/auth/register ──────────────────────────────────────────────────
+// ── POST /api/auth/register ───────────────────────────────────────────────────
 router.post('/register', asyncHandler(async (req, res) => {
-  if (process.env.NODE_ENV === 'production') {
-    throw new AppError(404, 'Not found');
-  }
-
   const schema = z.object({
-    email: z.string().email(),
-    name: z.string().min(1).optional(),
-    password: z.string().min(6),
+    email:    z.string().email('Invalid email address'),
+    name:     z.string().min(1).optional(),
+    password: z.string().min(6, 'Password must be at least 6 characters'),
   });
 
   const parsed = schema.safeParse(req.body);
@@ -85,11 +63,16 @@ router.post('/register', asyncHandler(async (req, res) => {
   }
 
   const { email, name, password } = parsed.data;
+
   const existing = await prisma.user.findUnique({ where: { email } });
-  if (existing) throw new AppError(409, 'Email already registered');
+  if (existing) throw new AppError(409, 'An account with this email already exists');
 
   const user = await prisma.user.create({
-    data: { email, name: name || email.split('@')[0], passwordHash: hashPassword(password) },
+    data: {
+      email,
+      name: name || email.split('@')[0],
+      passwordHash: hashPassword(password),
+    },
     select: { id: true, email: true, name: true },
   });
 
@@ -98,15 +81,11 @@ router.post('/register', asyncHandler(async (req, res) => {
   res.status(201).json({ token, user });
 }));
 
-// ── POST /api/auth/login ─────────────────────────────────────────────────────
+// ── POST /api/auth/login ──────────────────────────────────────────────────────
 router.post('/login', asyncHandler(async (req, res) => {
-  if (process.env.NODE_ENV === 'production') {
-    throw new AppError(404, 'Not found');
-  }
-
   const schema = z.object({
-    email: z.string().email(),
-    password: z.string().min(1),
+    email:    z.string().email('Invalid email address'),
+    password: z.string().min(1, 'Password is required'),
   });
 
   const parsed = schema.safeParse(req.body);
@@ -125,10 +104,10 @@ router.post('/login', asyncHandler(async (req, res) => {
   res.json({ token, user: { id: user.id, email: user.email, name: user.name } });
 }));
 
-// ── GET /api/auth/me ─────────────────────────────────────────────────────────
+// ── GET /api/auth/me ──────────────────────────────────────────────────────────
 router.get('/me', asyncHandler(async (req, res) => {
   const header = req.headers.authorization;
-  if (!header?.startsWith('Bearer ')) throw new AppError(401, 'No token');
+  if (!header?.startsWith('Bearer ')) throw new AppError(401, 'No token provided');
 
   const payload = verifyJwt(header.slice(7));
   const user = await prisma.user.findUnique({
