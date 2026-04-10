@@ -1,6 +1,13 @@
 /**
  * AMFI Service
  * Source: https://www.amfiindia.com/spages/NAVAll.txt
+ *
+ * Format of NAVAll.txt (semicolon-delimited):
+ * Scheme Code;ISIN Div Payout/ISIN Growth;ISIN Div Reinvestment;Scheme Name;Net Asset Value;Date
+ *
+ * The file has section headers like:
+ * Open Ended Schemes(Equity Scheme - Flexi Cap Fund)
+ * which we use to extract the category.
  */
 
 import axios from 'axios';
@@ -9,10 +16,7 @@ import { cacheGet, cacheSet, TTL } from '../lib/redis.js';
 
 const AMFI_URL = process.env.AMFI_NAV_URL || 'https://www.amfiindia.com/spages/NAVAll.txt';
 
-/**
- * Parse the raw AMFI flat file into structured objects.
- * Updated to support both Regular and Direct plans while prioritizing Growth.
- */
+// Parse the raw AMFI flat file into structured objects
 function parseAmfiText(raw) {
   const lines = raw.split('\n').map(l => l.trim()).filter(Boolean);
   const funds = [];
@@ -20,41 +24,31 @@ function parseAmfiText(raw) {
   let currentAmc = 'Unknown';
 
   for (const line of lines) {
-    // 1. Handle Section Headers
+    // Section headers look like: "Open Ended Schemes(Equity Scheme - Flexi Cap Fund)"
     if (line.startsWith('Open Ended') || line.startsWith('Close Ended') || line.startsWith('Interval')) {
       const match = line.match(/\((.+)\)/);
       currentCategory = match ? match[1] : line;
       continue;
     }
 
-    // 2. Handle AMC Name Lines (lines without semicolons)
+    // AMC name lines have no semicolons and are not headers
     if (!line.includes(';')) {
       if (line.length > 2 && !line.startsWith('-')) currentAmc = line;
       continue;
     }
 
-    // 3. Parse Data Row
     const parts = line.split(';');
     if (parts.length < 6) continue;
 
     const [schemeCode, isinGrowth, isinDiv, schemeName, navRaw, navDate] = parts;
     const nav = parseFloat(navRaw);
-    
-    // Skip invalid entries or zero NAVs
     if (!schemeCode || isNaN(nav) || nav <= 0) continue;
 
+    // Only index Direct Growth plans to avoid duplicates
     const nameUpper = schemeName.toUpperCase();
+    if (!nameUpper.includes('DIRECT') && !nameUpper.includes('DIR')) continue;
+    if (!nameUpper.includes('GROWTH') && !nameUpper.includes('GR')) continue;
 
-    // 4. FILTER: Keep only 'Growth' or 'GR' variants to prevent duplicate records
-    // This removes IDCW (Dividend) Payout and Reinvestment plans.
-    const isGrowth = nameUpper.includes('GROWTH') || nameUpper.includes('GR');
-    if (!isGrowth) continue;
-
-    // 5. IDENTIFY: Determine if Direct or Regular
-    const isDirect = nameUpper.includes('DIRECT') || nameUpper.includes('DIR');
-    const planType = isDirect ? 'DIRECT' : 'REGULAR';
-
-    // 6. MAP: Push to results array
     funds.push({
       id: `IN-${schemeCode.trim()}`,
       region: 'INDIA',
@@ -64,7 +58,6 @@ function parseAmfiText(raw) {
       ticker: `AMFI-${schemeCode.trim()}`,
       isin: isinGrowth?.trim() || null,
       category: currentCategory,
-      planType: planType, // Used for the custom sorting logic
       latestNav: nav,
       navDate: navDate?.trim() || null,
     });
@@ -73,10 +66,10 @@ function parseAmfiText(raw) {
   return funds;
 }
 
-// In-memory store logic
+// In-memory store for the full parsed AMFI list (avoids re-parsing on every search)
 let amfiCache = null;
 let amfiCacheTime = 0;
-const AMFI_MEM_TTL = 4 * 60 * 60 * 1000; 
+const AMFI_MEM_TTL = 4 * 60 * 60 * 1000; // 4h in ms
 
 export async function fetchAllAmfiNavs() {
   const now = Date.now();
@@ -93,59 +86,35 @@ export async function fetchAllAmfiNavs() {
   }
 
   logger.info('Fetching fresh NAVAll.txt from AMFI...');
-  try {
-    const response = await axios.get(AMFI_URL, {
-      timeout: 30000,
-      responseType: 'text',
-      headers: { 'User-Agent': 'GlobalWealthTracker/1.0' },
-    });
+  const response = await axios.get(AMFI_URL, {
+    timeout: 30000,
+    responseType: 'text',
+    headers: { 'User-Agent': 'GlobalWealthTracker/1.0' },
+  });
 
-    const funds = parseAmfiText(response.data);
-    logger.info(`AMFI: parsed ${funds.length} total Growth schemes (Regular + Direct)`);
+  const funds = parseAmfiText(response.data);
+  logger.info(`AMFI: parsed ${funds.length} Direct Growth schemes`);
 
-    await cacheSet(cacheKey, funds, TTL.NAV);
-    amfiCache = funds;
-    amfiCacheTime = now;
-    return funds;
-  } catch (error) {
-    logger.error('Failed to fetch AMFI NAVs', error);
-    return amfiCache || []; // Return stale cache if fetch fails
-  }
+  await cacheSet(cacheKey, funds, TTL.NAV);
+  amfiCache = funds;
+  amfiCacheTime = now;
+  return funds;
 }
 
-// Full-text search (unchanged but now finds both)
-export async function searchAmfi(query) {
-  // Full-text search across name + AMC with custom sorting
+// Full-text search across name + AMC
 export async function searchAmfi(query) {
   const all = await fetchAllAmfiNavs();
   const q = query.toLowerCase();
-
   return all
     .filter(f =>
       f.name.toLowerCase().includes(q) ||
       f.amc.toLowerCase().includes(q) ||
       f.schemeCode.includes(q)
     )
-    .sort((a, b) => {
-      // 1. First, keep the same funds grouped together by comparing AMC + Name 
-      // (We strip 'Direct' and 'Regular' from names to compare the base fund name)
-      const nameA = a.name.toLowerCase().replace('direct', '').replace('regular', '').trim();
-      const nameB = b.name.toLowerCase().replace('direct', '').replace('regular', '').trim();
-
-      if (nameA < nameB) return -1;
-      if (nameA > nameB) return 1;
-
-      // 2. If it's the same base fund, put Regular (R) before Direct (D)
-      // In JavaScript, 'Regular' > 'Direct' alphabetically, so b > a for descending
-      if (a.planType === 'REGULAR' && b.planType === 'DIRECT') return -1;
-      if (a.planType === 'DIRECT' && b.planType === 'REGULAR') return 1;
-      
-      return 0;
-    })
-    .slice(0, 50); // Cap results after sorting
-}
+    .slice(0, 50); // cap results
 }
 
+// Get current NAV for a single scheme code
 export async function getAmfiNav(schemeCode) {
   const cacheKey = `amfi:nav:${schemeCode}`;
   const cached = await cacheGet(cacheKey);
