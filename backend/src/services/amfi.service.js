@@ -108,16 +108,34 @@ export async function fetchAllAmfiNavs() {
   }
 }
 
-// Full-text search (unchanged but now finds both)
+// Full-text search: Filters first, then sorts top matches to put Regular on top
 export async function searchAmfi(query) {
   const all = await fetchAllAmfiNavs();
   const q = query.toLowerCase();
+
   return all
     .filter(f =>
       f.name.toLowerCase().includes(q) ||
       f.amc.toLowerCase().includes(q) ||
       f.schemeCode.includes(q)
     )
+    // We slice a slightly larger buffer (100) to ensure we have pairs to sort
+    .slice(0, 100) 
+    .sort((a, b) => {
+      // Create a base name by removing 'Direct' and 'Regular' to keep variants together
+      const baseA = a.name.toLowerCase().replace('direct', '').replace('regular', '').trim();
+      const baseB = b.name.toLowerCase().replace('direct', '').replace('regular', '').trim();
+
+      // If they are the same fund, put REGULAR before DIRECT
+      if (baseA === baseB) {
+        if (a.planType === 'REGULAR' && b.planType === 'DIRECT') return -1;
+        if (a.planType === 'DIRECT' && b.planType === 'REGULAR') return 1;
+      }
+
+      // Otherwise, keep the original AMFI order (alphabetical by fund name)
+      return baseA.localeCompare(baseB);
+    })
+    // Return final cap of 50
     .slice(0, 50);
 }
 
