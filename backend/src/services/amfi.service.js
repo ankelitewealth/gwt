@@ -9,7 +9,10 @@ import { cacheGet, cacheSet, TTL } from '../lib/redis.js';
 
 const AMFI_URL = process.env.AMFI_NAV_URL || 'https://www.amfiindia.com/spages/NAVAll.txt';
 
-// Parse the raw AMFI flat file into structured objects
+/**
+ * Parse the raw AMFI flat file into structured objects.
+ * Updated to support both Regular and Direct plans while prioritizing Growth.
+ */
 function parseAmfiText(raw) {
   const lines = raw.split('\n').map(l => l.trim()).filter(Boolean);
   const funds = [];
@@ -17,39 +20,41 @@ function parseAmfiText(raw) {
   let currentAmc = 'Unknown';
 
   for (const line of lines) {
-    // Section headers
+    // 1. Handle Section Headers
     if (line.startsWith('Open Ended') || line.startsWith('Close Ended') || line.startsWith('Interval')) {
       const match = line.match(/\((.+)\)/);
       currentCategory = match ? match[1] : line;
       continue;
     }
 
-    // AMC name lines
+    // 2. Handle AMC Name Lines (lines without semicolons)
     if (!line.includes(';')) {
       if (line.length > 2 && !line.startsWith('-')) currentAmc = line;
       continue;
     }
 
+    // 3. Parse Data Row
     const parts = line.split(';');
     if (parts.length < 6) continue;
 
     const [schemeCode, isinGrowth, isinDiv, schemeName, navRaw, navDate] = parts;
     const nav = parseFloat(navRaw);
     
+    // Skip invalid entries or zero NAVs
     if (!schemeCode || isNaN(nav) || nav <= 0) continue;
 
     const nameUpper = schemeName.toUpperCase();
 
-    // --- UPDATED FILTERING LOGIC ---
-    
-    // 1. Keep Growth plans (Gr), exclude IDCW/Dividend/Reinvestment to avoid duplicates
-    // Most users want Growth; if you need Dividend plans, remove the next line.
-    if (!nameUpper.includes('GROWTH') && !nameUpper.includes('GR')) continue;
+    // 4. FILTER: Keep only 'Growth' or 'GR' variants to prevent duplicate records
+    // This removes IDCW (Dividend) Payout and Reinvestment plans.
+    const isGrowth = nameUpper.includes('GROWTH') || nameUpper.includes('GR');
+    if (!isGrowth) continue;
 
-    // 2. Identify Plan Type
+    // 5. IDENTIFY: Determine if Direct or Regular
     const isDirect = nameUpper.includes('DIRECT') || nameUpper.includes('DIR');
     const planType = isDirect ? 'DIRECT' : 'REGULAR';
 
+    // 6. MAP: Push to results array
     funds.push({
       id: `IN-${schemeCode.trim()}`,
       region: 'INDIA',
@@ -59,7 +64,7 @@ function parseAmfiText(raw) {
       ticker: `AMFI-${schemeCode.trim()}`,
       isin: isinGrowth?.trim() || null,
       category: currentCategory,
-      planType: planType, // Added for easier filtering in UI
+      planType: planType, // Used for the custom sorting logic
       latestNav: nav,
       navDate: navDate?.trim() || null,
     });
