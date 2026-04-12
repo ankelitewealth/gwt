@@ -5,11 +5,12 @@ export function fmtINR(n) {
   });
 }
 
-export function fmtUSD(n) {
-  return '$' + Number(n).toLocaleString('en-US', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  });
+// lib/format.js
+export function fmtCurrency(value, currency = 'USD') {
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: currency,
+  }).format(value);
 }
 
 export function fmtCurrency(n, currency) {
