@@ -44,7 +44,6 @@ export async function searchYahoo(query) {
       amc: q.exchDisp || q.exchange || 'Global',
       category: q.quoteType,
       exchange: q.exchange,
-      // Pass the currency found in search to the frontend
       currency: q.currency === 'GBX' ? 'GBP' : (q.currency || 'USD'),
     }));
 
@@ -68,7 +67,7 @@ export async function getYahooQuote(ticker) {
   let price = meta.regularMarketPrice ?? meta.previousClose;
   let currency = (meta.currency || 'USD').toUpperCase();
 
-  // FIX: If Yahoo says GBX (Pence), convert to GBP (£)
+  // FIX: Handle London Stock Exchange "Pence" (GBX)
   if (currency === 'GBX') {
     price = price / 100;
     currency = 'GBP';
@@ -77,11 +76,28 @@ export async function getYahooQuote(ticker) {
   const quote = {
     ticker,
     price: price,
-    currency: currency, // This will now be 'GBP' for IIND.L
+    currency: currency,
     exchangeName: meta.exchangeName,
     navDate: new Date().toISOString().split('T')[0],
   };
 
   await cacheSet(cacheKey, quote, TTL.NAV);
   return quote;
+}
+
+/**
+ * ADDED: This function was missing from the export, 
+ * which caused the navSync job to fail.
+ */
+export async function getBatchQuotes(tickers) {
+  const results = await Promise.allSettled(tickers.map(t => getYahooQuote(t)));
+  const map = {};
+  results.forEach((r, i) => {
+    if (r.status === 'fulfilled') {
+      map[tickers[i]] = r.value;
+    } else {
+      logger.warn(`Quote failed for ${tickers[i]}: ${r.reason?.message}`);
+    }
+  });
+  return map;
 }
