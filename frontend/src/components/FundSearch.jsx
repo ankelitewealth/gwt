@@ -154,7 +154,12 @@ export function FundSearch() {
                       <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)', fontFamily: 'var(--font-mono)', marginTop: 2 }}>
                         {fund.ticker}
                         {fund.amc && ` · ${fund.amc}`}
-                        {fund.latestNav != null && ` · NAV ${fmtCurrency(fund.latestNav, fund.currency || (searchRegion === 'INDIA' ? 'INR' : 'USD'))}`}
+                        {fund.latestNav != null && (
+  ` · NAV ${fmtCurrency(
+    fund.latestNav, 
+    fund.currency || (searchRegion === 'INDIA' ? 'INR' : 'USD')
+  )}`
+)}
                         {fund.category && ` · ${fund.category}`}
                       </div>
                     </div>
