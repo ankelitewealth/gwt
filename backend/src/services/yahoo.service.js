@@ -22,7 +22,7 @@ const yfClient = axios.create({
   },
 });
 
-// Search Yahoo Finance for funds/ETFs
+// Search: Now captures currency and exchange info to distinguish between $ and £
 export async function searchYahoo(query) {
   const cacheKey = `yf:search:${query.toLowerCase()}`;
   const cached = await cacheGet(cacheKey);
@@ -31,17 +31,15 @@ export async function searchYahoo(query) {
   const response = await yfClient.get('/v1/finance/search', {
     params: {
       q: query,
-      quotesCount: 20,
+      quotesCount: 25, // Increased count to see more exchange variants
       newsCount: 0,
       listsCount: 0,
-      enableFuzzyQuery: false,
-      quotesQueryId: 'tss_match_phrase_query',
+      enableFuzzyQuery: true,
     },
   });
 
   const quotes = response.data?.quotes || [];
 
-  // Filter to equity/ETF types only (exclude crypto, forex, futures)
   const relevant = quotes
     .filter(q => ['EQUITY', 'ETF', 'MUTUALFUND'].includes(q.quoteType))
     .map(q => ({
@@ -52,14 +50,16 @@ export async function searchYahoo(query) {
       amc: q.exchDisp || q.exchange || 'Global',
       category: q.quoteType,
       exchange: q.exchange,
-      latestNav: null, // fetched separately
+      // Adding currency and display name helps users pick the right one (GBP vs USD)
+      currency: q.currency || 'USD', 
+      shortName: q.shortname
     }));
 
   await cacheSet(cacheKey, relevant, TTL.SEARCH);
   return relevant;
 }
 
-// Fetch latest close price for a ticker
+// Quote: Automatically handles the "Pence vs Pounds" (GBp/GBX) issue
 export async function getYahooQuote(ticker) {
   const cacheKey = `yf:quote:${ticker}`;
   const cached = await cacheGet(cacheKey);
@@ -77,11 +77,26 @@ export async function getYahooQuote(ticker) {
   if (!result) throw new Error(`No data for ticker ${ticker}`);
 
   const meta = result.meta;
+  let price = meta.regularMarketPrice ?? meta.previousClose;
+  let currency = meta.currency ? meta.currency.toUpperCase() : 'USD';
+
+  /**
+   * TWEAK: Handle London Stock Exchange "Pence" (GBX/GBp)
+   * UK ETFs like NDIA.L are priced in pence. 
+   * If currency is GBX, we convert to GBP (divide by 100) for consistency.
+   */
+  if (currency === 'GBX' || currency === 'GBP' && price > 500) {
+    // Note: If Yahoo returns 'GBX', it is definitely pence.
+    if (currency === 'GBX') {
+        price = price / 100;
+        currency = 'GBP'; 
+    }
+  }
+
   const quote = {
     ticker,
-    price: meta.regularMarketPrice ?? meta.previousClose,
-    previousClose: meta.previousClose,
-    currency: meta.currency,
+    price: price,
+    currency: currency,
     exchangeName: meta.exchangeName,
     marketState: meta.marketState,
     navDate: new Date().toISOString().split('T')[0],
@@ -91,7 +106,6 @@ export async function getYahooQuote(ticker) {
   return quote;
 }
 
-// Batch-fetch quotes for multiple tickers (avoids N+1 calls)
 export async function getBatchQuotes(tickers) {
   const results = await Promise.allSettled(tickers.map(t => getYahooQuote(t)));
   const map = {};
