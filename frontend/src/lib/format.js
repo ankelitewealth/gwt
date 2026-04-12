@@ -6,11 +6,25 @@ export function fmtINR(n) {
 }
 
 // lib/format.js
+/**
+ * Formats a number as a currency string.
+ * Supports multiple currencies like INR, USD, GBP, EUR.
+ */
 export function fmtCurrency(value, currency = 'USD') {
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: currency,
-  }).format(value);
+  if (value === null || value === undefined) return '—';
+
+  try {
+    return new Intl.NumberFormat('en-IN', {
+      style: 'currency',
+      currency: currency,
+      // UK/Europe often use 2 decimal places, India often use 2.
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(value);
+  } catch (err) {
+    // Fallback if currency code is invalid
+    return `${currency} ${value.toFixed(2)}`;
+  }
 }
 
 
