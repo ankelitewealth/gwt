@@ -13,10 +13,7 @@ export function fmtCurrency(value, currency = 'USD') {
   }).format(value);
 }
 
-export function fmtCurrency(n, currency) {
-  if (currency === 'INR') return fmtINR(n);
-  return fmtUSD(n);
-}
+
 
 export function fmtUnits(n) {
   return Number(n).toLocaleString('en-IN', {
