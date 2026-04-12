@@ -28,12 +28,12 @@ export async function searchYahoo(query) {
   const cached = await cacheGet(cacheKey);
   if (cached) return cached;
 
+  // We fetch more results (25) because the GBP version might be lower in the list
   const response = await yfClient.get('/v1/finance/search', {
     params: {
       q: query,
-      quotesCount: 25, // Increased count to see more exchange variants
+      quotesCount: 25, 
       newsCount: 0,
-      listsCount: 0,
       enableFuzzyQuery: true,
     },
   });
@@ -50,9 +50,8 @@ export async function searchYahoo(query) {
       amc: q.exchDisp || q.exchange || 'Global',
       category: q.quoteType,
       exchange: q.exchange,
-      // Adding currency and display name helps users pick the right one (GBP vs USD)
-      currency: q.currency || 'USD', 
-      shortName: q.shortname
+      // CRITICAL: We pass the currency from the search so the UI can show £ vs $
+      currency: q.currency || (q.symbol.endsWith('.L') ? 'GBP' : 'USD'),
     }));
 
   await cacheSet(cacheKey, relevant, TTL.SEARCH);
@@ -65,12 +64,8 @@ export async function getYahooQuote(ticker) {
   const cached = await cacheGet(cacheKey);
   if (cached) return cached;
 
-  logger.debug(`Yahoo Finance: fetching quote for ${ticker}`);
   const response = await yfClient.get(`/v8/finance/chart/${ticker}`, {
-    params: {
-      interval: '1d',
-      range: '1d',
-    },
+    params: { interval: '1d', range: '1d' },
   });
 
   const result = response.data?.chart?.result?.[0];
@@ -80,25 +75,24 @@ export async function getYahooQuote(ticker) {
   let price = meta.regularMarketPrice ?? meta.previousClose;
   let currency = meta.currency ? meta.currency.toUpperCase() : 'USD';
 
-  /**
-   * TWEAK: Handle London Stock Exchange "Pence" (GBX/GBp)
-   * UK ETFs like NDIA.L are priced in pence. 
-   * If currency is GBX, we convert to GBP (divide by 100) for consistency.
-   */
-  if (currency === 'GBX' || currency === 'GBP' && price > 500) {
-    // Note: If Yahoo returns 'GBX', it is definitely pence.
-    if (currency === 'GBX') {
-        price = price / 100;
-        currency = 'GBP'; 
-    }
+  // --- REGIONAL ADJUSTMENTS ---
+
+  // 1. UK/London Fix: Yahoo quotes many UK funds in Pence (GBX)
+  // If we see GBX, we divide by 100 to return GBP (£)
+  if (currency === 'GBX') {
+    price = price / 100;
+    currency = 'GBP';
   }
+
+  // 2. European/Canadian Fix: 
+  // Ensure we don't default to USD if the metadata specifies EUR or CAD
+  // (No math needed here, just ensuring the 'currency' field is respected)
 
   const quote = {
     ticker,
-    price: price,
-    currency: currency,
+    price: price, // Native price (e.g., 50.25)
+    currency: currency, // Native currency (e.g., 'EUR', 'CAD', 'GBP')
     exchangeName: meta.exchangeName,
-    marketState: meta.marketState,
     navDate: new Date().toISOString().split('T')[0],
   };
 
