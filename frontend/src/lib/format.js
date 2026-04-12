@@ -5,28 +5,24 @@ export function fmtINR(n) {
   });
 }
 
-// lib/format.js
+
 /**
  * Formats a number as a currency string.
- * Supports multiple currencies like INR, USD, GBP, EUR.
+ * Supports INR, USD, GBP, EUR, etc.
  */
 export function fmtCurrency(value, currency = 'USD') {
   if (value === null || value === undefined) return '—';
 
   try {
-    return new Intl.NumberFormat('en-IN', {
+    return new Intl.NumberFormat('en-GB', {
       style: 'currency',
       currency: currency,
-      // UK/Europe often use 2 decimal places, India often use 2.
       minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
     }).format(value);
   } catch (err) {
-    // Fallback if currency code is invalid
-    return `${currency} ${value.toFixed(2)}`;
+    return `${currency} ${value}`;
   }
 }
-
 
 
 export function fmtUnits(n) {
